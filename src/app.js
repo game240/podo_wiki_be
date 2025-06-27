@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 // 2) 파일 저장용 디렉토리 (없으면 생성)
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = path.join(__dirname, "../data");
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -33,7 +33,7 @@ app.post("/api/save", async (req, res) => {
     // 파일 쓰기 (UTF-8)
     await fs.promises.writeFile(filePath, content, "utf8");
 
-    res.json({ message: "파일 저장 성공", path: `/data/${safeName}` });
+    res.json({ message: "파일 저장 성공", path: `../data/${safeName}` });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "서버 오류", error: err.message });
