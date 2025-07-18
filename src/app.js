@@ -310,6 +310,7 @@ app.get("/api/page", async (req, res) => {
         updated_at: page.updated_at,
         author_id: page.author_id,
         current_rev: page.current_rev,
+        current_rev_number: currNum,
       },
       content: doc,
     });
