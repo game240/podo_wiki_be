@@ -384,6 +384,31 @@ app.get("/api/search", async (req, res) => {
   res.json({ data, pagination: { total, page, pageSize, totalPages } });
 });
 
+app.get("/api/search-autocomplete", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (!q) {
+    return res.json([]);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("pages")
+      .select("title")
+      .ilike("title", `${q}%`)
+      .order("title", { ascending: true })
+      .limit(10);
+
+    if (error) throw error;
+
+    // [{ title: '…' }, …] → ['…', …]
+    const titles = data.map((r) => r.title);
+    res.json(titles);
+  } catch (err) {
+    console.error("AUTOCOMPLETE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 4) 서버 시작
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
