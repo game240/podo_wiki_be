@@ -301,6 +301,35 @@ app.get("/api/page", async (req, res) => {
       doc = newDocument;
     }
 
+    // 분류 가져오
+    const { data: cats, error: catErr } = await supabase
+      .from("page_categories")
+      .select(
+        `
+        category_id,
+        ord,                   
+        category:categories (   
+          id,               
+          name              
+        )
+      `
+      )
+      .eq("page_id", pageId);
+
+    if (catErr) throw catErr;
+
+    // cats 결과 예시
+    // [
+    //   { category_id: 'd75da8e2-…', ord: 0, category: { id: 'd75da8e2-…', name: '테스트' } },
+    //   …
+    /// ]
+
+    // 최종적으로는 원하는 형태로 매핑 [{ category_id, name }, { category_id, name }, ...]
+    const categories = cats.map(({ category_id, ord, category }) => ({
+      category_id,
+      name: category.name,
+    }));
+
     // 6) 최종 문서 반환
     return res.json({
       meta: {
@@ -311,6 +340,7 @@ app.get("/api/page", async (req, res) => {
         author_id: page.author_id,
         current_rev: page.current_rev,
         current_rev_number: currNum,
+        categories,
       },
       content: doc,
     });
