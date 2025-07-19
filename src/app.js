@@ -202,18 +202,33 @@ app.post("/api/page", async (req, res) => {
     let baseDoc = null;
     let lastRevNumber = 0;
     if (page.current_rev) {
+      // 1-1) 현재 리비전 정보 조회 (rev_number, content)
       const { data: lastRev, error: revErr } = await supabase
         .from("revisions")
         .select("rev_number, content")
         .eq("id", page.current_rev)
         .single();
       if (revErr) throw revErr;
-      baseDoc = lastRev.content;
+
+      // 1-2) pages 테이블에 저장된 최신 전체 문서 조회
+      const { data: pageRow, error: pageErr } = await supabase
+        .from("pages")
+        .select("content")
+        .eq("id", page.id)
+        .single();
+      if (pageErr) throw pageErr;
+
+      let pageContent = pageRow.content;
+      if (typeof pageContent === "string") {
+        pageContent = JSON.parse(pageContent);
+      }
+      // revision.content가 null이면 전체 문서(pages.content)를, 아니면 revision.content를 사용
+      baseDoc = lastRev.content ?? pageContent;
       lastRevNumber = lastRev.rev_number;
     }
 
     // diff 계산
-    const base = baseDoc ?? [];
+    const base = baseDoc ?? {};
     const patch = compare(base, content);
     const isSnapshot =
       // 최초 리비전이거나,
