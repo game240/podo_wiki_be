@@ -18,6 +18,8 @@
     "express": "^5.1.0",
     "fast-json-patch": "^3.1.1",
     "mongoose": "^8.16.0",
-    "multer": "^2.0.1"
+    "multer": "^2.0.1",
+    "prosemirror-model": "^1.25.2",
+    "prosemirror-schema-basic": "^1.2.4"
   }
 }

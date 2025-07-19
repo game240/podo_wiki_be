@@ -2,6 +2,8 @@ const express = require("express");
 // const fs = require("fs");
 // const path = require("path");
 const { compare, applyPatch } = require("fast-json-patch");
+const { Node: PMNode } = require("prosemirror-model");
+const { schema: basicSchema } = require("prosemirror-schema-basic");
 
 const app = express();
 
@@ -217,10 +219,18 @@ app.post("/api/page", async (req, res) => {
       .single();
     if (insertErr) throw insertErr;
 
-    // pages.current_rev 갱신
+    const doc = isSnapshot
+      ? content
+      : applyPatch(baseDoc, patch, true).newDocument;
+
+    // pages.current_rev, pages.content 갱신
     const { error: updateErr } = await supabase
       .from("pages")
-      .update({ current_rev: newRev.id, updated_at: new Date().toISOString() })
+      .update({
+        current_rev: newRev.id,
+        updated_at: new Date().toISOString(),
+        content: doc,
+      })
       .eq("id", page.id);
     if (updateErr) throw updateErr;
 
@@ -301,6 +311,35 @@ app.get("/api/page", async (req, res) => {
       doc = newDocument;
     }
 
+    // 분류 가져오기
+    const { data: cats, error: catErr } = await supabase
+      .from("page_categories")
+      .select(
+        `
+        category_id,
+        ord,                   
+        category:categories (   
+          id,               
+          name              
+        )
+      `
+      )
+      .eq("page_id", pageId);
+
+    if (catErr) throw catErr;
+
+    // cats 결과 예시
+    // [
+    //   { category_id: 'd75da8e2-…', ord: 0, category: { id: 'd75da8e2-…', name: '테스트' } },
+    //   …
+    /// ]
+
+    // 최종적으로는 원하는 형태로 매핑 [{ category_id, name }, { category_id, name }, ...]
+    const categories = cats.map(({ category_id, ord, category }) => ({
+      category_id,
+      name: category.name,
+    }));
+
     // 6) 최종 문서 반환
     return res.json({
       meta: {
@@ -311,12 +350,62 @@ app.get("/api/page", async (req, res) => {
         author_id: page.author_id,
         current_rev: page.current_rev,
         current_rev_number: currNum,
+        categories,
       },
       content: doc,
     });
   } catch (err) {
     console.error("GET PAGE ERROR:", err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/search", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.status(400).json({ error: "검색어(q)를 전달하세요." });
+
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const pageSize = Math.max(parseInt(req.query.pageSize, 10) || 20, 1);
+  const from = (page - 1) * pageSize;
+
+  const { data, error: rpcError } = await supabase.rpc("search_pages", {
+    _q: q,
+    _from: from,
+    _limit: pageSize,
+  });
+  if (rpcError) {
+    console.error("RPC 에러:", rpcError);
+    return res.status(500).json({ error: rpcError.message });
+  }
+
+  const total = data.length > 0 ? Number(data[0].total_count) : 0;
+  const totalPages = Math.ceil(total / pageSize);
+
+  res.json({ data, pagination: { total, page, pageSize, totalPages } });
+});
+
+app.get("/api/search-autocomplete", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (!q) {
+    return res.json([]);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("pages")
+      .select("title")
+      .ilike("title", `${q}%`)
+      .order("title", { ascending: true })
+      .limit(10);
+
+    if (error) throw error;
+
+    // [{ title: '…' }, …] → ['…', …]
+    const titles = data.map((r) => r.title);
+    res.json(titles);
+  } catch (err) {
+    console.error("AUTOCOMPLETE ERROR:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
