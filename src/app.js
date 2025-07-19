@@ -160,6 +160,21 @@ const SNAPSHOT_THRESHOLD = 50;
 
 app.post("/api/page", async (req, res) => {
   try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const token = authHeader.split(" ")[1];
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser(token);
+    if (userError || !user) {
+      console.error("getUser error:", userError);
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
     const { title, content, summary } = req.body;
     if (!title || !content) {
       return res.status(400).json({ error: "title과 content가 필요합니다." });
@@ -176,7 +191,7 @@ app.post("/api/page", async (req, res) => {
     if (!page) {
       const { data: inserted, error: err2 } = await supabase
         .from("pages")
-        .insert({ title, created_by: req.headers["x-user-id"] })
+        .insert({ title, created_by: user.id })
         .select("id, current_rev")
         .single();
       if (err2) throw err2;
@@ -213,7 +228,7 @@ app.post("/api/page", async (req, res) => {
         diff: isSnapshot ? null : patch,
         base_rev: isSnapshot ? null : page.current_rev,
         summary: summary || null,
-        created_by: req.headers["x-user-id"],
+        created_by: user.id,
       })
       .select("id")
       .single();
