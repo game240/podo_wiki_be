@@ -502,6 +502,16 @@ function summarizeDiffs(diffOps, previousDoc) {
         }
         break;
 
+      case "remove":
+        try {
+          // jsonpointer 로 이전 문서에서 노드 가져오기
+          const oldNode = getByPointer(previousDoc, op.path);
+          removed += countChars(oldNode);
+        } catch {
+          // 경로가 없으면 스킵
+        }
+        break;
+
       case "replace":
         // 텍스트 노드 경로 끝이 "/text" 여야만 처리
         if (op.path.endsWith("/text") && typeof op.value === "string") {
