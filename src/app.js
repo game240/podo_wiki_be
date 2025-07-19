@@ -2,6 +2,8 @@ const express = require("express");
 // const fs = require("fs");
 // const path = require("path");
 const { compare, applyPatch } = require("fast-json-patch");
+const { Node: PMNode } = require("prosemirror-model");
+const { schema: basicSchema } = require("prosemirror-schema-basic");
 
 const app = express();
 
@@ -217,10 +219,18 @@ app.post("/api/page", async (req, res) => {
       .single();
     if (insertErr) throw insertErr;
 
-    // pages.current_rev 갱신
+    const doc = isSnapshot
+      ? content
+      : applyPatch(baseDoc, patch, true).newDocument;
+
+    // pages.current_rev, pages.content 갱신
     const { error: updateErr } = await supabase
       .from("pages")
-      .update({ current_rev: newRev.id, updated_at: new Date().toISOString() })
+      .update({
+        current_rev: newRev.id,
+        updated_at: new Date().toISOString(),
+        content: doc,
+      })
       .eq("id", page.id);
     if (updateErr) throw updateErr;
 
@@ -301,7 +311,7 @@ app.get("/api/page", async (req, res) => {
       doc = newDocument;
     }
 
-    // 분류 가져오
+    // 분류 가져오기
     const { data: cats, error: catErr } = await supabase
       .from("page_categories")
       .select(
@@ -358,7 +368,7 @@ app.get("/api/search", async (req, res) => {
   const pageSize = Math.max(parseInt(req.query.pageSize, 10) || 20, 1);
   const from = (page - 1) * pageSize;
 
-  const { data, error: rpcError } = await supabase.rpc("search_with_count", {
+  const { data, error: rpcError } = await supabase.rpc("search_pages", {
     _q: q,
     _from: from,
     _limit: pageSize,
@@ -368,15 +378,10 @@ app.get("/api/search", async (req, res) => {
     return res.status(500).json({ error: rpcError.message });
   }
 
-  // 3) total_count 는 모든 행에 동일하게 붙어 있으므로 첫 행에서 꺼냅니다.
   const total = data.length > 0 ? Number(data[0].total_count) : 0;
   const totalPages = Math.ceil(total / pageSize);
 
-  // 4) 응답 (불필요한 total_count 필드는 클라이언트가 무시해도 됩니다)
-  res.json({
-    data,
-    pagination: { total, page, pageSize, totalPages },
-  });
+  res.json({ data, pagination: { total, page, pageSize, totalPages } });
 });
 
 // 4) 서버 시작
