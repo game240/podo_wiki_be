@@ -213,7 +213,8 @@ app.post("/api/page", async (req, res) => {
     }
 
     // diff 계산
-    const patch = baseDoc ? compare(baseDoc, content) : [];
+    const base = baseDoc ?? [];
+    const patch = compare(base, content);
     const isSnapshot =
       // 최초 리비전이거나,
       !baseDoc ||
@@ -229,7 +230,7 @@ app.post("/api/page", async (req, res) => {
         rev_number: newRevNumber,
         is_snapshot: isSnapshot,
         content: isSnapshot ? content : null,
-        diff: isSnapshot ? null : patch,
+        diff: patch,
         base_rev: isSnapshot ? null : page.current_rev,
         summary: summary || null,
         created_by: user.id,
