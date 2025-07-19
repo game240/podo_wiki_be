@@ -320,6 +320,35 @@ app.get("/api/page", async (req, res) => {
   }
 });
 
+app.get("/api/search", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.status(400).json({ error: "검색어(q)를 전달하세요." });
+
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const pageSize = Math.max(parseInt(req.query.pageSize, 10) || 20, 1);
+  const from = (page - 1) * pageSize;
+
+  const { data, error: rpcError } = await supabase.rpc("search_with_count", {
+    _q: q,
+    _from: from,
+    _limit: pageSize,
+  });
+  if (rpcError) {
+    console.error("RPC 에러:", rpcError);
+    return res.status(500).json({ error: rpcError.message });
+  }
+
+  // 3) total_count 는 모든 행에 동일하게 붙어 있으므로 첫 행에서 꺼냅니다.
+  const total = data.length > 0 ? Number(data[0].total_count) : 0;
+  const totalPages = Math.ceil(total / pageSize);
+
+  // 4) 응답 (불필요한 total_count 필드는 클라이언트가 무시해도 됩니다)
+  res.json({
+    data,
+    pagination: { total, page, pageSize, totalPages },
+  });
+});
+
 // 4) 서버 시작
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
