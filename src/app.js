@@ -569,6 +569,11 @@ app.get("/api/recent-change", async (req, res) => {
     const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
+    const { count: totalCount, error: countErr } = await supabase
+      .from("revisions")
+      .select("id", { head: true, count: "exact" });
+    if (countErr) throw countErr;
+
     // 2-1) 최근 리비전 목록 조회
     const { data: revs, error } = await supabase
       .from("revisions")
@@ -612,7 +617,10 @@ app.get("/api/recent-change", async (req, res) => {
       })
     );
 
-    res.json({ changes });
+    const totalPages = Math.ceil((totalCount ?? 0) / limit);
+    const hasMore = offset + revs.length < (totalCount ?? 0);
+
+    res.json({ changes, pagination: { totalCount, totalPages, hasMore } });
   } catch (err) {
     console.error("GET /api/recent-change Error:", err);
     res.status(500).json({
