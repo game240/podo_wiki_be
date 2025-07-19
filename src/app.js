@@ -497,18 +497,32 @@ function summarizeDiffs(diffOps, previousDoc) {
   diffOps.forEach((op) => {
     switch (op.op) {
       case "add":
-        if (op.value != null) {
-          added += countChars(op.value);
+        if (op.value) {
+          // 이미지인지 텍스트/블록인지 구분
+          if (op.value.type === "image") {
+            added += 1;
+          } else {
+            added += countChars(op.value);
+          }
         }
         break;
 
       case "remove":
-        try {
-          // jsonpointer 로 이전 문서에서 노드 가져오기
-          const oldNode = getByPointer(previousDoc, op.path);
-          removed += countChars(oldNode);
-        } catch {
-          // 경로가 없으면 스킵
+        // op.value 가 있으면 바로 쓰고, 없으면 previousDoc 에서 찾아오기
+        let oldNode = op.value;
+        if (!oldNode) {
+          try {
+            oldNode = getByPointer(previousDoc, op.path);
+          } catch {
+            oldNode = null;
+          }
+        }
+        if (oldNode) {
+          if (oldNode.type === "image") {
+            removed += 1;
+          } else {
+            removed += countChars(oldNode);
+          }
         }
         break;
 
