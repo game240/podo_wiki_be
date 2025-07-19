@@ -214,7 +214,11 @@ app.post("/api/page", async (req, res) => {
 
     // diff 계산
     const patch = baseDoc ? compare(baseDoc, content) : [];
-    const isSnapshot = !baseDoc || patch.length > SNAPSHOT_THRESHOLD;
+    const isSnapshot =
+      // 최초 리비전이거나,
+      !baseDoc ||
+      // (리비전 번호 % SNAPSHOT_THRESHOLD === 0)일 때 스냅샷
+      (lastRevNumber + 1) % SNAPSHOT_THRESHOLD === 0;
     const newRevNumber = lastRevNumber + 1;
 
     // revisions 테이블에 저장
@@ -421,6 +425,55 @@ app.get("/api/search-autocomplete", async (req, res) => {
   } catch (err) {
     console.error("AUTOCOMPLETE ERROR:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/recent-change?limit=10&offset=0
+app.get("/api/recent-change", async (req, res) => {
+  try {
+    // 쿼리파라미터 파싱 (기본값 limit=10, offset=0)
+    const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const start = offset;
+    const end = offset + limit - 1;
+
+    // revisions 테이블에서 최신순으로 join 조회
+    const { data, error } = await supabase
+      .from("revisions")
+      .select(
+        `
+        id,
+        page_id,
+        rev_number,
+        diff,
+        created_at,
+        pages!revisions_page_id_fkey ( title ),
+        profiles!revisions_created_by_profiles_fkey ( nickname )
+      `
+      )
+      .order("created_at", { ascending: false })
+      .limit(limit)
+      .range(start, end);
+
+    if (error) throw error;
+
+    // 응답 포맷 가공
+    const changes = data.map((r) => ({
+      revision_id: r.id,
+      page_id: r.page_id,
+      title: r.pages.title,
+      modifier: r.profiles.nickname,
+      edited_at: r.created_at,
+      rev_number: r.rev_number,
+      diff: r.diff,
+    }));
+
+    res.json({ changes });
+  } catch (err) {
+    console.error("GET /api/revisions/recent Error:", err);
+    res
+      .status(500)
+      .json({ message: "최근 변경내역 조회 중 오류 발생", error: err.message });
   }
 });
 
