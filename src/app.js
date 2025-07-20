@@ -2,8 +2,7 @@ const express = require("express");
 // const fs = require("fs");
 // const path = require("path");
 const { compare, applyPatch } = require("fast-json-patch");
-const { Node: PMNode } = require("prosemirror-model");
-const { schema: basicSchema } = require("prosemirror-schema-basic");
+const { get: getByPointer } = require("jsonpointer");
 
 const app = express();
 
@@ -60,6 +59,7 @@ app.use(express.json());
 
 const multer = require("multer");
 const supabase = require("./supabaseClient");
+const { diffChars } = require("diff");
 
 const upload = multer(); // 메모리 상에서 파일 처리
 
@@ -160,6 +160,21 @@ const SNAPSHOT_THRESHOLD = 50;
 
 app.post("/api/page", async (req, res) => {
   try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const token = authHeader.split(" ")[1];
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser(token);
+    if (userError || !user) {
+      console.error("getUser error:", userError);
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
     const { title, content, summary } = req.body;
     if (!title || !content) {
       return res.status(400).json({ error: "title과 content가 필요합니다." });
@@ -176,7 +191,7 @@ app.post("/api/page", async (req, res) => {
     if (!page) {
       const { data: inserted, error: err2 } = await supabase
         .from("pages")
-        .insert({ title, created_by: req.headers["x-user-id"] })
+        .insert({ title, created_by: user.id })
         .select("id, current_rev")
         .single();
       if (err2) throw err2;
@@ -187,19 +202,44 @@ app.post("/api/page", async (req, res) => {
     let baseDoc = null;
     let lastRevNumber = 0;
     if (page.current_rev) {
+      // 1-1) 현재 리비전 정보 조회 (rev_number, content)
       const { data: lastRev, error: revErr } = await supabase
         .from("revisions")
         .select("rev_number, content")
         .eq("id", page.current_rev)
         .single();
       if (revErr) throw revErr;
-      baseDoc = lastRev.content;
+
+      // 1-2) pages 테이블에 저장된 최신 전체 문서 조회
+      const { data: pageRow, error: pageErr } = await supabase
+        .from("pages")
+        .select("content")
+        .eq("id", page.id)
+        .single();
+      if (pageErr) throw pageErr;
+
+      let pageContent = pageRow.content;
+      if (typeof pageContent === "string") {
+        pageContent = JSON.parse(pageContent);
+      }
+      // revision.content가 null이면 전체 문서(pages.content)를, 아니면 revision.content를 사용
+      baseDoc = lastRev.content ?? pageContent;
       lastRevNumber = lastRev.rev_number;
     }
 
     // diff 계산
-    const patch = baseDoc ? compare(baseDoc, content) : [];
-    const isSnapshot = !baseDoc || patch.length > SNAPSHOT_THRESHOLD;
+    const base = baseDoc ?? {};
+    const patch = compare(
+      base,
+      content,
+      /* invertible */ true,
+      /* options */ { includeMove: true, includeValueOnRemove: true }
+    );
+    const isSnapshot =
+      // 최초 리비전이거나,
+      !baseDoc ||
+      // (리비전 번호 % SNAPSHOT_THRESHOLD === 0)일 때 스냅샷
+      (lastRevNumber + 1) % SNAPSHOT_THRESHOLD === 0;
     const newRevNumber = lastRevNumber + 1;
 
     // revisions 테이블에 저장
@@ -210,10 +250,10 @@ app.post("/api/page", async (req, res) => {
         rev_number: newRevNumber,
         is_snapshot: isSnapshot,
         content: isSnapshot ? content : null,
-        diff: isSnapshot ? null : patch,
+        diff: patch,
         base_rev: isSnapshot ? null : page.current_rev,
         summary: summary || null,
-        created_by: req.headers["x-user-id"],
+        created_by: user.id,
       })
       .select("id")
       .single();
@@ -246,6 +286,41 @@ app.post("/api/page", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+const reconstructRevisionContent = async (page_id, target_rev_number) => {
+  // 1-1) 가장 가까운 스냅샷 조회
+  const { data: snap, error: snapErr } = await supabase
+    .from("revisions")
+    .select("content, rev_number")
+    .eq("page_id", page_id)
+    .eq("is_snapshot", true)
+    .lte("rev_number", target_rev_number)
+    .order("rev_number", { ascending: false })
+    .limit(1)
+    .single();
+  if (snapErr || !snap) return {};
+
+  let doc = snap.content;
+  const snapRev = snap.rev_number;
+
+  // 1-2) 스냅샷 이후 target_rev_number까지의 델타 조회
+  const { data: deltas, error: deltaErr } = await supabase
+    .from("revisions")
+    .select("diff")
+    .eq("page_id", page_id)
+    .gt("rev_number", snapRev)
+    .lte("rev_number", target_rev_number)
+    .order("rev_number", { ascending: true });
+  if (deltaErr) return doc;
+
+  // 1-3) 델타 순차 적용
+  for (const { diff } of deltas) {
+    const { newDocument } = applyPatch(doc, diff, /*validate=*/ true);
+    doc = newDocument;
+  }
+
+  return doc;
+};
 
 // 7) 리비전 조회 by title (Flat 검색)
 app.get("/api/page", async (req, res) => {
@@ -282,34 +357,7 @@ app.get("/api/page", async (req, res) => {
     const currNum = currRev.rev_number;
 
     // 3) 가장 가까운 스냅샷 조회
-    const { data: snap, error: snapErr } = await supabase
-      .from("revisions")
-      .select("content, rev_number")
-      .eq("page_id", pageId)
-      .eq("is_snapshot", true)
-      .lte("rev_number", currNum)
-      .order("rev_number", { ascending: false })
-      .limit(1)
-      .single();
-    if (snapErr) throw snapErr;
-    let doc = snap.content;
-    const snapNum = snap.rev_number;
-
-    // 4) 스냅샷 이후 델타 조회
-    const { data: deltas, error: deltaErr } = await supabase
-      .from("revisions")
-      .select("diff")
-      .eq("page_id", pageId)
-      .gt("rev_number", snapNum)
-      .lte("rev_number", currNum)
-      .order("rev_number", { ascending: true });
-    if (deltaErr) throw deltaErr;
-
-    // 5) patch 순차 적용
-    for (const { diff } of deltas) {
-      const { newDocument } = applyPatch(doc, diff, true);
-      doc = newDocument;
-    }
+    const doc = await reconstructRevisionContent(pageId, currNum);
 
     // 분류 가져오기
     const { data: cats, error: catErr } = await supabase
@@ -405,6 +453,215 @@ app.get("/api/search-autocomplete", async (req, res) => {
     res.json(titles);
   } catch (err) {
     console.error("AUTOCOMPLETE ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function countChars(node) {
+  let cnt = 0;
+  if (Array.isArray(node)) {
+    node.forEach((c) => (cnt += countChars(c)));
+  } else if (node && typeof node === "object") {
+    if (node.type === "text" && typeof node.text === "string") {
+      cnt += node.text.length;
+    }
+    if (Array.isArray(node.content)) {
+      cnt += countChars(node.content);
+    }
+  } else if (typeof node === "string") {
+    cnt += node.length;
+  }
+  return cnt;
+}
+
+function summarizeTextReplace(oldText, newText) {
+  let added = 0,
+    removed = 0;
+  const diffs = diffChars(oldText, newText);
+  diffs.forEach((part) => {
+    if (part.added) added += part.count ?? 0;
+    if (part.removed) removed += part.count ?? 0;
+  });
+  return { added, removed };
+}
+
+// summarize diff ops against a full previousDoc JSON
+function summarizeDiffs(diffOps, previousDoc) {
+  let added = 0,
+    removed = 0,
+    modified = 0,
+    moved = 0,
+    copied = 0,
+    tested = 0;
+
+  diffOps.forEach((op) => {
+    switch (op.op) {
+      case "add":
+        if (op.value) {
+          // 이미지인지 텍스트/블록인지 구분
+          if (op.value.type === "image") {
+            added += 1;
+          } else {
+            added += countChars(op.value);
+          }
+        }
+        break;
+
+      case "remove":
+        // op.value 가 있으면 바로 쓰고, 없으면 previousDoc 에서 찾아오기
+        let oldNode = op.value;
+        if (!oldNode) {
+          try {
+            oldNode = getByPointer(previousDoc, op.path);
+          } catch {
+            oldNode = null;
+          }
+        }
+        if (oldNode) {
+          if (oldNode.type === "image") {
+            removed += 1;
+          } else {
+            removed += countChars(oldNode);
+          }
+        }
+        break;
+
+      case "replace":
+        // 텍스트 노드 경로 끝이 "/text" 여야만 처리
+        if (op.path.endsWith("/text") && typeof op.value === "string") {
+          const oldText = getByPointer(previousDoc, op.path) ?? "";
+          const newText = op.value;
+          const { added: a, removed: r } = summarizeTextReplace(
+            oldText,
+            newText
+          );
+          added += a;
+          removed += r;
+        }
+        break;
+
+      case "replace":
+        {
+          let oldText = "";
+          try {
+            oldText = getByPointer(previousDoc, op.path);
+          } catch {}
+          const newText = op.value;
+
+          // 2) 문자 단위 diff
+          const { added: a, removed: r } = summarizeTextReplace(
+            oldText,
+            newText
+          );
+          added += a;
+          removed += r;
+        }
+        break;
+    }
+  });
+
+  return { added, removed, modified };
+}
+
+// GET /api/recent-change?limit=10&offset=0
+app.get("/api/recent-change", async (req, res) => {
+  try {
+    const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    const { count: totalCount, error: countErr } = await supabase
+      .from("revisions")
+      .select("id", { head: true, count: "exact" });
+    if (countErr) throw countErr;
+
+    // 2-1) 최근 리비전 목록 조회
+    const { data: revs, error } = await supabase
+      .from("revisions")
+      .select(
+        `
+        id, page_id, rev_number, diff, created_at,
+        pages!revisions_page_id_fkey(title),
+        profiles!revisions_created_by_profiles_fkey(nickname)
+      `
+      )
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) throw error;
+
+    // 2-2) 각 리비전에 대해 이전 전체 문서 복원 → diff 요약
+    const changes = await Promise.all(
+      revs.map(async (r) => {
+        // 바로 이전 rev_number 의 전체 문서
+        const previousDoc =
+          r.rev_number > 1
+            ? await reconstructRevisionContent(r.page_id, r.rev_number - 1)
+            : {};
+
+        const { added, removed, modified } = summarizeDiffs(
+          r.diff || [],
+          previousDoc
+        );
+
+        return {
+          revision_id: r.id,
+          page_id: r.page_id,
+          title: r.pages.title,
+          modifier: r.profiles.nickname,
+          edited_at: r.created_at,
+          rev_number: r.rev_number,
+          diff: r.diff,
+          addedCount: added,
+          removedCount: removed,
+          modifiedCount: modified,
+        };
+      })
+    );
+
+    const totalPages = Math.ceil((totalCount ?? 0) / limit);
+    const hasMore = offset + revs.length < (totalCount ?? 0);
+
+    res.json({ changes, pagination: { totalCount, totalPages, hasMore } });
+  } catch (err) {
+    console.error("GET /api/recent-change Error:", err);
+    res.status(500).json({
+      message: "최근 변경내역 조회 중 오류 발생",
+      error: err.message,
+    });
+  }
+});
+
+app.get("/api/recent-change/pages", async (req, res) => {
+  try {
+    const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    const { data, error, count } = await supabase
+      .from("pages")
+      .select(
+        `
+          id,
+          title,
+          updated_at
+        `,
+        { count: "exact" }
+      )
+      .order("updated_at", { ascending: false })
+      .limit(limit)
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      items: data.map((p) => ({
+        page_id: p.id,
+        title: p.title,
+        updated_at: p.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error("[/api/recent-pages] error:", err);
     res.status(500).json({ error: err.message });
   }
 });
