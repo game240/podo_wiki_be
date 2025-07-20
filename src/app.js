@@ -630,6 +630,42 @@ app.get("/api/recent-change", async (req, res) => {
   }
 });
 
+app.get("/api/recent-change/pages", async (req, res) => {
+  try {
+    const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    const { data, error, count } = await supabase
+      .from("pages")
+      .select(
+        `
+          id,
+          title,
+          updated_at
+        `,
+        { count: "exact" }
+      )
+      .order("updated_at", { ascending: false })
+      .limit(limit)
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      items: data.map((p) => ({
+        page_id: p.id,
+        title: p.title,
+        updated_at: p.updated_at,
+      })),
+    });
+  } catch (err) {
+    console.error("[/api/recent-pages] error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 4) 서버 시작
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
