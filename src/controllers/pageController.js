@@ -1,6 +1,7 @@
 const supabase = require("../config/supabaseClient");
 const { compare, applyPatch, summarizeDiffs } = require("../utils/diffUtils");
 const authenticate = require("../middleware/auth");
+const { reconstructRevisionContent } = require("../services/revisionServices");
 
 const SNAPSHOT_THRESHOLD = 50;
 
@@ -24,6 +25,7 @@ exports.savePage = [
       }
 
       const { title, content, summary } = req.body;
+      const withLineDiff = String(req.query.with_line_diff || "") === "1";
       if (!title || !content) {
         return res.status(400).json({ error: "title과 content가 필요합니다." });
       }
@@ -46,11 +48,10 @@ exports.savePage = [
         page = inserted;
       }
 
-      // 마지막 리비전 가져오기
+      // 마지막 리비전/베이스 문서
       let baseDoc = null;
       let lastRevNumber = 0;
       if (page.current_rev) {
-        // 1-1) 현재 리비전 정보 조회 (rev_number, content)
         const { data: lastRev, error: revErr } = await supabase
           .from("revisions")
           .select("rev_number, content")
@@ -58,7 +59,6 @@ exports.savePage = [
           .single();
         if (revErr) throw revErr;
 
-        // 1-2) pages 테이블에 저장된 최신 전체 문서 조회
         const { data: pageRow, error: pageErr } = await supabase
           .from("pages")
           .select("content")
@@ -67,15 +67,14 @@ exports.savePage = [
         if (pageErr) throw pageErr;
 
         let pageContent = pageRow.content;
-        if (typeof pageContent === "string") {
+        if (typeof pageContent === "string")
           pageContent = JSON.parse(pageContent);
-        }
-        // revision.content가 null이면 전체 문서(pages.content)를, 아니면 revision.content를 사용
+
         baseDoc = lastRev.content ?? pageContent;
         lastRevNumber = lastRev.rev_number;
       }
 
-      // diff 계산
+      // JSON Patch diff 계산/스냅샷 여부
       const base = baseDoc ?? {};
       const patch = compare(
         base,
@@ -84,13 +83,10 @@ exports.savePage = [
         /* options */ { includeMove: true, includeValueOnRemove: true }
       );
       const isSnapshot =
-        // 최초 리비전이거나,
-        !baseDoc ||
-        // (리비전 번호 % SNAPSHOT_THRESHOLD === 0)일 때 스냅샷
-        (lastRevNumber + 1) % SNAPSHOT_THRESHOLD === 0;
+        !baseDoc || (lastRevNumber + 1) % SNAPSHOT_THRESHOLD === 0;
       const newRevNumber = lastRevNumber + 1;
 
-      // revisions 테이블에 저장
+      // revisions 저장
       const { data: newRev, error: insertErr } = await supabase
         .from("revisions")
         .insert({
@@ -107,11 +103,12 @@ exports.savePage = [
         .single();
       if (insertErr) throw insertErr;
 
+      // 새 문서
       const doc = isSnapshot
         ? content
         : applyPatch(baseDoc, patch, true).newDocument;
 
-      // pages.current_rev, pages.content 갱신
+      // pages 갱신
       const { error: updateErr } = await supabase
         .from("pages")
         .update({
@@ -122,12 +119,36 @@ exports.savePage = [
         .eq("id", page.id);
       if (updateErr) throw updateErr;
 
+      // (옵션) Git-like 라인 diff 계산
+      let lineDiffOps, lineDiffSummary, unifiedPatch;
+      if (withLineDiff) {
+        const oldText = docToText(base);
+        const newText = docToText(content);
+        lineDiffOps = gitLikeDiff(oldText, newText, { withIntraLine: true });
+        lineDiffSummary = summarizeGitOps(lineDiffOps);
+        unifiedPatch = createUnifiedPatch(
+          oldText,
+          newText,
+          `${title}@${lastRevNumber || 0}`,
+          `${title}@${newRevNumber}`,
+          /*context*/ 3
+        );
+      }
+
       res.json({
         message: "페이지 저장 성공",
         page_id: page.id,
         revision_id: newRev.id,
         rev_number: newRevNumber,
         is_snapshot: isSnapshot,
+        json_patch_summary: summarizeDiffs ? summarizeDiffs(patch) : undefined,
+        line_diff: withLineDiff
+          ? {
+              ops: lineDiffOps,
+              summary: lineDiffSummary,
+              unified_patch: unifiedPatch,
+            }
+          : undefined,
       });
     } catch (err) {
       console.error("SAVE PAGE ERROR:", err);
@@ -135,41 +156,6 @@ exports.savePage = [
     }
   },
 ];
-
-const reconstructRevisionContent = async (page_id, target_rev_number) => {
-  // 1-1) 가장 가까운 스냅샷 조회
-  const { data: snap, error: snapErr } = await supabase
-    .from("revisions")
-    .select("content, rev_number")
-    .eq("page_id", page_id)
-    .eq("is_snapshot", true)
-    .lte("rev_number", target_rev_number)
-    .order("rev_number", { ascending: false })
-    .limit(1)
-    .single();
-  if (snapErr || !snap) return {};
-
-  let doc = snap.content;
-  const snapRev = snap.rev_number;
-
-  // 1-2) 스냅샷 이후 target_rev_number까지의 델타 조회
-  const { data: deltas, error: deltaErr } = await supabase
-    .from("revisions")
-    .select("diff")
-    .eq("page_id", page_id)
-    .gt("rev_number", snapRev)
-    .lte("rev_number", target_rev_number)
-    .order("rev_number", { ascending: true });
-  if (deltaErr) return doc;
-
-  // 1-3) 델타 순차 적용
-  for (const { diff } of deltas) {
-    const { newDocument } = applyPatch(doc, diff, /*validate=*/ true);
-    doc = newDocument;
-  }
-
-  return doc;
-};
 
 // 7) 리비전 조회 by title (Flat 검색)
 exports.getPage = async (req, res) => {
@@ -181,10 +167,9 @@ exports.getPage = async (req, res) => {
         .json({ error: "title 쿼리 파라미터가 필요합니다." });
     }
 
-    // 1) title로 페이지 메타 조회
     const { data: page, error: pageErr } = await supabase
       .from("pages")
-      .select("id, current_rev, title, created_at, updated_at")
+      .select("id, current_rev, title, created_at, updated_at, created_by")
       .eq("title", title)
       .maybeSingle();
     if (pageErr) throw pageErr;
@@ -196,7 +181,6 @@ exports.getPage = async (req, res) => {
     const pageId = page.id;
     const currentRevId = page.current_rev;
 
-    // 2) current_rev의 rev_number 조회
     const { data: currRev, error: currRevErr } = await supabase
       .from("revisions")
       .select("rev_number")
@@ -205,46 +189,36 @@ exports.getPage = async (req, res) => {
     if (currRevErr) throw currRevErr;
     const currNum = currRev.rev_number;
 
-    // 3) 가장 가까운 스냅샷 조회
     const doc = await reconstructRevisionContent(pageId, currNum);
 
-    // 분류 가져오기
+    // TODO: categories service로 refactor
     const { data: cats, error: catErr } = await supabase
       .from("page_categories")
       .select(
         `
-        category_id,
-        ord,                   
-        category:categories (   
-          id,               
-          name              
-        )
-      `
+          category_id,
+          ord,
+          category:categories (
+            id,
+            name
+          )
+        `
       )
       .eq("page_id", pageId);
-
     if (catErr) throw catErr;
 
-    // cats 결과 예시
-    // [
-    //   { category_id: 'd75da8e2-…', ord: 0, category: { id: 'd75da8e2-…', name: '테스트' } },
-    //   …
-    /// ]
-
-    // 최종적으로는 원하는 형태로 매핑 [{ category_id, name }, { category_id, name }, ...]
-    const categories = cats.map(({ category_id, ord, category }) => ({
+    const categories = (cats || []).map(({ category_id, category }) => ({
       category_id,
       name: category.name,
     }));
 
-    // 6) 최종 문서 반환
     return res.json({
       meta: {
         id: page.id,
         title: page.title,
         created_at: page.created_at,
         updated_at: page.updated_at,
-        author_id: page.author_id,
+        created_by: page.created_by,
         current_rev: page.current_rev,
         current_rev_number: currNum,
         categories,
@@ -254,5 +228,71 @@ exports.getPage = async (req, res) => {
   } catch (err) {
     console.error("GET PAGE ERROR:", err);
     return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getRevisionById = async (req, res) => {
+  try {
+    const { revision_id } = req.params;
+
+    const { data: revRow, error } = await supabase
+      .from("revisions")
+      .select(
+        "id, page_id, rev_number, created_at, created_by, is_snapshot, content"
+      )
+      .eq("id", revision_id)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!revRow)
+      return res.status(404).json({ error: "해당 리비전을 찾을 수 없습니다." });
+
+    const { data: page } = await supabase
+      .from("pages")
+      .select("id, title, created_at, updated_at, created_by, current_rev")
+      .eq("id", revRow.page_id)
+      .maybeSingle();
+
+    const doc = revRow.is_snapshot
+      ? revRow.content
+      : await reconstructRevisionContent(revRow.page_id, revRow.rev_number);
+
+    // TODO: categories service로 refactor
+    const { data: cats, error: catErr } = await supabase
+      .from("page_categories")
+      .select(
+        `
+          category_id,
+          ord,
+          category:categories (
+            id,
+            name
+          )
+        `
+      )
+      .eq("page_id", revRow.page_id);
+    if (catErr) throw catErr;
+
+    const categories = (cats || []).map(({ category_id, category }) => ({
+      category_id,
+      name: category.name,
+    }));
+
+    return res.json({
+      meta: {
+        id: page.id,
+        title: page.title,
+        created_at: page.created_at,
+        updated_at: page.updated_at,
+        created_by: page.created_by,
+        current_rev: page.current_rev,
+        current_rev_number: revRow.rev_number,
+        categories,
+      },
+      content: doc,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
   }
 };
