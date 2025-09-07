@@ -1,0 +1,55 @@
+{
+  "/api/upload": {
+    "post": {
+      "summary": "Upload an image/file and receive a signed URL",
+      "tags": ["Upload"],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "multipart/form-data": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "file": { "type": "string", "format": "binary" }
+              },
+              "required": ["file"]
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": { "description": "Upload success" },
+        "400": { "description": "File is required" },
+        "500": { "description": "Server error" }
+      }
+    }
+  },
+  "/api/presign": {
+    "get": {
+      "summary": "Create a signed URL for a private file path",
+      "tags": ["Upload"],
+      "parameters": [
+        { "in": "query", "name": "path", "required": true, "schema": { "type": "string" }, "description": "File path in storage" }
+      ],
+      "responses": {
+        "200": { "description": "Returns signedUrl" },
+        "400": { "description": "path query is required" },
+        "500": { "description": "Server error" }
+      }
+    }
+  },
+  "/api/image-proxy": {
+    "get": {
+      "summary": "Redirect to a short-lived signed URL for an image",
+      "tags": ["Upload"],
+      "parameters": [
+        { "in": "query", "name": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "302": { "description": "Redirects to signed URL" },
+        "400": { "description": "path query is required" },
+        "500": { "description": "Server error" }
+      }
+    }
+  }
+}

@@ -1,6 +1,8 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./docs/openapi");
 
 const uploadRoutes = require("./routes/upload");
 const pageRoutes = require("./routes/page");
@@ -10,6 +12,9 @@ const recentRoutes = require("./routes/recent");
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Swagger UI
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use("/api", uploadRoutes);
 app.use("/api", pageRoutes);

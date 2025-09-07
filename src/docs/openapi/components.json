@@ -1,0 +1,21 @@
+{
+  "securitySchemes": {
+    "bearerAuth": {
+      "type": "http",
+      "scheme": "bearer",
+      "bearerFormat": "JWT"
+    }
+  },
+  "schemas": {
+    "Pagination": {
+      "type": "object",
+      "properties": {
+        "total": { "type": "integer" },
+        "totalPages": { "type": "integer" },
+        "page": { "type": "integer" },
+        "pageSize": { "type": "integer" },
+        "hasMore": { "type": "boolean" }
+      }
+    }
+  }
+}
