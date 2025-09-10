@@ -1,5 +1,13 @@
 const supabase = require("../config/supabaseClient");
-const { compare, applyPatch, summarizeDiffs } = require("../utils/diffUtils");
+const {
+  compare,
+  applyPatch,
+  summarizeDiffs,
+  docToText,
+  gitLikeDiff,
+  summarizeGitOps,
+  createUnifiedPatch,
+} = require("../utils/diffUtils");
 const authenticate = require("../middleware/auth");
 const { reconstructRevisionContent } = require("../services/revisionServices");
 

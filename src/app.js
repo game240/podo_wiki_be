@@ -3,6 +3,7 @@ const express = require("express");
 // const path = require("path");
 const { compare, applyPatch } = require("fast-json-patch");
 const { get: getByPointer } = require("jsonpointer");
+const { reconstructRevisionContent } = require("./services/revisionServices");
 
 const app = express();
 
@@ -58,7 +59,7 @@ app.use(express.json());
 // });
 
 const multer = require("multer");
-const supabase = require("./supabaseClient");
+const supabase = require("./config/supabaseClient");
 const { diffChars } = require("diff");
 
 const upload = multer(); // 메모리 상에서 파일 처리
@@ -287,40 +288,7 @@ app.post("/api/page", async (req, res) => {
   }
 });
 
-const reconstructRevisionContent = async (page_id, target_rev_number) => {
-  // 1-1) 가장 가까운 스냅샷 조회
-  const { data: snap, error: snapErr } = await supabase
-    .from("revisions")
-    .select("content, rev_number")
-    .eq("page_id", page_id)
-    .eq("is_snapshot", true)
-    .lte("rev_number", target_rev_number)
-    .order("rev_number", { ascending: false })
-    .limit(1)
-    .single();
-  if (snapErr || !snap) return {};
-
-  let doc = snap.content;
-  const snapRev = snap.rev_number;
-
-  // 1-2) 스냅샷 이후 target_rev_number까지의 델타 조회
-  const { data: deltas, error: deltaErr } = await supabase
-    .from("revisions")
-    .select("diff")
-    .eq("page_id", page_id)
-    .gt("rev_number", snapRev)
-    .lte("rev_number", target_rev_number)
-    .order("rev_number", { ascending: true });
-  if (deltaErr) return doc;
-
-  // 1-3) 델타 순차 적용
-  for (const { diff } of deltas) {
-    const { newDocument } = applyPatch(doc, diff, /*validate=*/ true);
-    doc = newDocument;
-  }
-
-  return doc;
-};
+// reconstructRevisionContent is now imported from services/revisionServices
 
 // 7) 리비전 조회 by title (Flat 검색)
 app.get("/api/page", async (req, res) => {

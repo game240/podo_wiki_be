@@ -1,6 +1,6 @@
 const { compare, applyPatch } = require("fast-json-patch");
 const { get: getByPointer } = require("jsonpointer");
-const { diffChars } = require("diff");
+const { diffChars, diffLines, diffWords, createTwoFilesPatch } = require("diff");
 const countChars = require("./countChars");
 
 function summarizeTextReplace(oldText, newText) {
@@ -65,6 +65,43 @@ function summarizeDiffs(diffOps, previousDoc) {
   });
 
   return { added, removed, modified };
+}
+
+// Tiptap(ProseMirror) JSON에서 텍스트만 추출하여 이어붙임
+function extractTextFromPM(doc) {
+  if (!doc) return "";
+  const stack = [doc];
+  let out = "";
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) continue;
+    if (typeof node === "object") {
+      if (node.type === "text" && typeof node.text === "string") {
+        out += node.text;
+      }
+      if (Array.isArray(node.content)) {
+        for (let i = node.content.length - 1; i >= 0; i--) {
+          stack.push(node.content[i]);
+        }
+      }
+    } else if (typeof node === "string") {
+      out += node;
+    }
+  }
+  return out;
+}
+
+// 문자 단위 diff 기반으로 추가/삭제/교체(추정) 카운트
+function countCharDelta(prevText, currText) {
+  const parts = diffChars(prevText || "", currText || "");
+  let added = 0,
+    removed = 0;
+  for (const p of parts) {
+    if (p.added) added += p.value.length;
+    else if (p.removed) removed += p.value.length;
+  }
+  const replacements = Math.min(added, removed);
+  return { added, removed, replacements };
 }
 
 // Tiptap/일반 JSON/문자열 → 라인 비교용 텍스트
@@ -321,6 +358,8 @@ module.exports = {
   applyPatch,
   summarizeDiffs,
   countChars,
+  extractTextFromPM,
+  countCharDelta,
 
   // Git-like 라인 diff 관련
   docToText,
