@@ -14,6 +14,7 @@ exports.uploadFile = async (req, res) => {
       .upload(filePath, file.buffer, {
         cacheControl: "3600",
         upsert: false,
+        contentType: file.mimetype,
       });
     if (uploadErr) {
       throw uploadErr;
