@@ -304,3 +304,118 @@ exports.getRevisionById = async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 };
+
+exports.getRevisionByNumber = async (req, res) => {
+  try {
+    const { title, rev_number } = req.query;
+    if (!title || !rev_number) {
+      return res.status(400).json({ error: "title과 rev_number가 필요합니다." });
+    }
+    const n = parseInt(rev_number, 10);
+    if (!Number.isFinite(n) || n < 1) {
+      return res.status(400).json({ error: "rev_number는 1 이상의 정수여야 합니다." });
+    }
+
+    const { data: page, error: pageErr } = await supabase
+      .from("pages")
+      .select("id, title, created_at, updated_at, created_by, current_rev")
+      .eq("title", title)
+      .maybeSingle();
+    if (pageErr) throw pageErr;
+    if (!page) {
+      return res.status(404).json({ error: "해당 제목의 페이지를 찾을 수 없습니다." });
+    }
+
+    const { data: revRow, error: revErr } = await supabase
+      .from("revisions")
+      .select("id, rev_number, is_snapshot, content")
+      .eq("page_id", page.id)
+      .eq("rev_number", n)
+      .maybeSingle();
+    if (revErr) throw revErr;
+    if (!revRow) {
+      return res.status(404).json({ error: "해당 번호의 리비전을 찾을 수 없습니다." });
+    }
+
+    const doc = revRow.is_snapshot
+      ? revRow.content
+      : await reconstructRevisionContent(page.id, n);
+
+    const { data: cats, error: catErr } = await supabase
+      .from("page_categories")
+      .select(
+        `
+          category_id,
+          ord,
+          category:categories (
+            id,
+            name
+          )
+        `
+      )
+      .eq("page_id", page.id);
+    if (catErr) throw catErr;
+
+    const categories = (cats || []).map(({ category_id, category }) => ({
+      category_id,
+      name: category.name,
+    }));
+
+    return res.json({
+      meta: {
+        id: page.id,
+        title: page.title,
+        created_at: page.created_at,
+        updated_at: page.updated_at,
+        created_by: page.created_by,
+        current_rev: page.current_rev,
+        current_rev_number: n,
+        categories,
+      },
+      content: doc,
+    });
+  } catch (err) {
+    console.error("GET /page/revision Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getCurrentRevNumber = async (req, res) => {
+  try {
+    const { title } = req.query;
+    if (!title) {
+      return res
+        .status(400)
+        .json({ error: "title 쿼리 파라미터가 필요합니다." });
+    }
+
+    const { data: page, error: pageErr } = await supabase
+      .from("pages")
+      .select("id, title, current_rev")
+      .eq("title", title)
+      .maybeSingle();
+    if (pageErr) throw pageErr;
+    if (!page || !page.current_rev) {
+      return res
+        .status(404)
+        .json({ error: "페이지를 찾을 수 없거나 리비전이 존재하지 않습니다." });
+    }
+
+    const { data: currRev, error: currRevErr } = await supabase
+      .from("revisions")
+      .select("id, rev_number")
+      .eq("id", page.current_rev)
+      .single();
+    if (currRevErr) throw currRevErr;
+
+    return res.json({
+      page_id: page.id,
+      title: page.title,
+      revision_id: currRev.id,
+      current_rev_number: currRev.rev_number,
+    });
+  } catch (err) {
+    console.error("GET /page/current-rev Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};

@@ -21,5 +21,5 @@ app.use("/api", pageRoutes);
 app.use("/api", searchRoutes);
 app.use("/api", recentRoutes);
 
-const PORT = process.env.PORT || 3000;
+const PORT = 3003;
 app.listen(PORT, () => console.log(`✅ Server on http://localhost:${PORT}`));
