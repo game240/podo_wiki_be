@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node src/app.js",
-    "dev": "nodemon src/app.js",
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -18,10 +18,12 @@
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "fast-json-patch": "^3.1.1",
+    "jsonpatch": "^3.1.0",
     "jsonpointer": "^5.0.1",
     "mongoose": "^8.16.0",
     "multer": "^2.0.1",
     "prosemirror-model": "^1.25.2",
-    "prosemirror-schema-basic": "^1.2.4"
+    "prosemirror-schema-basic": "^1.2.4",
+    "swagger-ui-express": "^5.0.1"
   }
 }

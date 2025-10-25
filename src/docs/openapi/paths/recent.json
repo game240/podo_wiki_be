@@ -1,0 +1,30 @@
+{
+  "/api/recent-change": {
+    "get": {
+      "summary": "List recent changes with summarized diffs",
+      "tags": ["Recent"],
+      "parameters": [
+        { "in": "query", "name": "limit", "schema": { "type": "integer", "minimum": 1 }, "description": "Number of items to return (default 10)" },
+        { "in": "query", "name": "offset", "schema": { "type": "integer", "minimum": 0 }, "description": "Offset for pagination (default 0)" }
+      ],
+      "responses": {
+        "200": { "description": "Recent changes and pagination info" },
+        "500": { "description": "Server error" }
+      }
+    }
+  },
+  "/api/recent-change/pages": {
+    "get": {
+      "summary": "List pages ordered by updated_at desc",
+      "tags": ["Recent"],
+      "parameters": [
+        { "in": "query", "name": "limit", "schema": { "type": "integer", "minimum": 1 } },
+        { "in": "query", "name": "offset", "schema": { "type": "integer", "minimum": 0 } }
+      ],
+      "responses": {
+        "200": { "description": "List of pages with last updated time" },
+        "500": { "description": "Server error" }
+      }
+    }
+  }
+}

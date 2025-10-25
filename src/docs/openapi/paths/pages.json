@@ -1,0 +1,61 @@
+{
+  "/api/page": {
+    "post": {
+      "summary": "Save or update a page",
+      "tags": ["Pages"],
+      "security": [{ "bearerAuth": [] }],
+      "parameters": [
+        { "in": "query", "name": "with_line_diff", "schema": { "type": "string", "enum": ["0", "1"] }, "description": "Include Git-like line diff information in response when set to '1'" }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": ["title", "content"],
+              "properties": {
+                "title": { "type": "string" },
+                "summary": { "type": "string" },
+                "content": { "type": "object", "description": "ProseMirror JSON document" }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": { "description": "Page saved successfully" },
+        "400": { "description": "Missing required fields" },
+        "401": { "description": "Unauthorized" },
+        "500": { "description": "Server error" }
+      }
+    },
+    "get": {
+      "summary": "Get page by title",
+      "tags": ["Pages"],
+      "parameters": [
+        { "in": "query", "name": "title", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "Page metadata and content" },
+        "400": { "description": "title query is required" },
+        "404": { "description": "Page or revision not found" },
+        "500": { "description": "Server error" }
+      }
+    }
+  },
+  "/api/revision/{revision_id}": {
+    "get": {
+      "summary": "Get a specific revision by ID",
+      "tags": ["Pages"],
+      "parameters": [
+        { "in": "path", "name": "revision_id", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "Revision metadata and reconstructed content" },
+        "404": { "description": "Revision not found" },
+        "500": { "description": "Server error" }
+      }
+    }
+  }
+}
