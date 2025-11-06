@@ -21,7 +21,12 @@ exports.getDiff = async (req, res) => {
     }
 
     const resolveRevNumber = async (revLike) => {
-      if (revLike === undefined || revLike === null || revLike === "" || String(revLike) === "current") {
+      if (
+        revLike === undefined ||
+        revLike === null ||
+        revLike === "" ||
+        String(revLike).toLowerCase() === "current"
+      ) {
         if (!page.current_rev) {
           return res.status(404).json({ error: "현재 리비전이 존재하지 않습니다." });
         }
@@ -33,7 +38,8 @@ exports.getDiff = async (req, res) => {
         if (currErr) throw currErr;
         return curr.rev_number;
       }
-      const n = parseInt(revLike, 10);
+      const raw = String(revLike).trim();
+      const n = parseInt(raw.replace(/^v/i, ""), 10);
       if (!Number.isFinite(n) || n < 1) {
         throw new Error("rev는 1 이상의 정수 또는 'current'여야 합니다.");
       }
