@@ -8,6 +8,7 @@ const uploadRoutes = require("./routes/upload");
 const pageRoutes = require("./routes/page");
 const searchRoutes = require("./routes/search");
 const recentRoutes = require("./routes/recent");
+const diffRoutes = require("./routes/diff");
 
 const app = express();
 app.use(cors());
@@ -20,6 +21,7 @@ app.use("/api", uploadRoutes);
 app.use("/api", pageRoutes);
 app.use("/api", searchRoutes);
 app.use("/api", recentRoutes);
+app.use("/api", diffRoutes);
 
 const PORT = 3003;
 app.listen(PORT, () => console.log(`✅ Server on http://localhost:${PORT}`));
