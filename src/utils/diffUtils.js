@@ -1,6 +1,11 @@
 const { compare, applyPatch } = require("fast-json-patch");
 const { get: getByPointer } = require("jsonpointer");
-const { diffChars, diffLines, diffWords, createTwoFilesPatch } = require("diff");
+const {
+  diffChars,
+  diffLines,
+  diffWords,
+  createTwoFilesPatch,
+} = require("diff");
 const countChars = require("./countChars");
 
 function summarizeTextReplace(oldText, newText) {
@@ -353,6 +358,117 @@ function gitLikeDiffFromDocs(
   return { ops, summary, unified_patch, oldText, newText };
 }
 
+// Equal 구간을 context 기준으로 위 아래 자르기
+function clipGitOpsByContext(ops, context) {
+  if (!Array.isArray(ops)) {
+    return ops;
+  }
+  const ctx = Number.isFinite(context) ? context : 3;
+  if (ctx === Infinity) {
+    return ops;
+  }
+
+  // 세그먼트로 단순화: equal 런과 change를 번갈아 나열
+  const segments = [];
+  let i = 0;
+  while (i < ops.length) {
+    const op = ops[i];
+    if (op.type === "equal") {
+      // equal 연속 구간 모으기
+      let j = i;
+      const lines = [];
+      while (j < ops.length && ops[j].type === "equal") {
+        if (Array.isArray(ops[j].lines)) lines.push(...ops[j].lines);
+        j++;
+      }
+      segments.push({ kind: "equal", lines });
+      i = j;
+    } else {
+      segments.push({ kind: "change", op });
+      i++;
+    }
+  }
+
+  const firstChangeIdx = segments.findIndex((s) => s.kind === "change");
+  const lastChangeIdx = (() => {
+    for (let k = segments.length - 1; k >= 0; k--) {
+      if (segments[k].kind === "change") return k;
+    }
+    return -1;
+  })();
+
+  // 변경이 하나도 없으면: head ctx + … + tail ctx
+  if (firstChangeIdx === -1) {
+    const lines = segments.reduce((acc, s) => {
+      if (s.kind === "equal") acc.push(...s.lines);
+      return acc;
+    }, []);
+    if (lines.length <= ctx * 2)
+      return lines.length ? [{ type: "equal", lines }] : [];
+    const head = lines.slice(0, ctx);
+    const tail = lines.slice(lines.length - ctx);
+    const out = [];
+    if (head.length) {
+      out.push({ type: "equal", lines: head });
+    }
+    out.push({ type: "equal", lines: ["…"] });
+    if (tail.length) {
+      out.push({ type: "equal", lines: tail });
+    }
+    return out;
+  }
+
+  // 변경이 있는 경우: head / middle / tail 컨텍스트만 유지
+  const out = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg.kind === "change") {
+      out.push(seg.op);
+      continue;
+    }
+
+    const lines = seg.lines || [];
+    if (i < firstChangeIdx) {
+      // head: 마지막 ctx 줄만
+      const keep = Math.min(ctx, lines.length);
+      if (lines.length > keep) {
+        out.push({ type: "equal", lines: ["…"] });
+      }
+      if (keep > 0) {
+        out.push({ type: "equal", lines: lines.slice(lines.length - keep) });
+      }
+    } else if (i > lastChangeIdx) {
+      // tail: 처음 ctx 줄만
+      const keep = Math.min(ctx, lines.length);
+      if (keep > 0) {
+        out.push({ type: "equal", lines: lines.slice(0, keep) });
+      }
+      if (lines.length > keep) {
+        out.push({ type: "equal", lines: ["…"] });
+      }
+    } else {
+      // middle: 앞 ctx + … + 뒤 ctx
+      if (lines.length <= ctx * 2) {
+        if (lines.length) {
+          out.push({ type: "equal", lines });
+        }
+      } else {
+        const head = lines.slice(0, ctx);
+        const tail = lines.slice(lines.length - ctx);
+        if (head.length) {
+          out.push({ type: "equal", lines: head });
+        }
+        out.push({ type: "equal", lines: ["…"] });
+        if (tail.length) {
+          out.push({ type: "equal", lines: tail });
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 module.exports = {
   compare,
   applyPatch,
@@ -367,4 +483,5 @@ module.exports = {
   summarizeGitOps,
   createUnifiedPatch,
   gitLikeDiffFromDocs,
+  clipGitOpsByContext,
 };
