@@ -311,7 +311,8 @@ exports.getRevisionByNumber = async (req, res) => {
     if (!title || !rev_number) {
       return res.status(400).json({ error: "title과 rev_number가 필요합니다." });
     }
-    const n = parseInt(rev_number, 10);
+    const raw = String(rev_number).trim();
+    const n = parseInt(raw.replace(/^v/i, ""), 10);
     if (!Number.isFinite(n) || n < 1) {
       return res.status(400).json({ error: "rev_number는 1 이상의 정수여야 합니다." });
     }
